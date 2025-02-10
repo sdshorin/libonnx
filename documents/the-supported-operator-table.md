@@ -128,7 +128,7 @@
 |GRU-3||
 |GRU-1||
 |Gather-13||
-|Gather-11||
+|Gather-11|√|
 |Gather-1||
 |GatherElements-13||
 |GatherElements-11||
