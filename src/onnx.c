@@ -34,7 +34,7 @@ static void hmap_entry_callback(struct hmap_t * m, struct hmap_entry_t * e)
 		onnx_tensor_free((struct onnx_tensor_t *)e->value);
 }
 
-struct onnx_context_t * onnx_context_alloc(const void * buf, size_t len, struct onnx_resolver_t ** r, int rlen)
+struct onnx_context_t * onnx_context_alloc(const void * buf, size_t len, struct onnx_resolver_t ** r, int rlen, struct hmap_t * shape_params)
 {
 	struct onnx_context_t * ctx;
 	int i;
@@ -45,7 +45,7 @@ struct onnx_context_t * onnx_context_alloc(const void * buf, size_t len, struct 
 	ctx = onnx_malloc(sizeof(struct onnx_context_t));
 	if(!ctx)
 		return NULL;
-
+	ctx->shape_params = shape_params;
 	ctx->model = onnx__model_proto__unpack(NULL, len, buf);
 	if(!ctx->model)
 	{
@@ -121,7 +121,7 @@ struct onnx_context_t * onnx_context_alloc(const void * buf, size_t len, struct 
 	return ctx;
 }
 
-struct onnx_context_t * onnx_context_alloc_from_file(const char * filename, struct onnx_resolver_t ** r, int rlen)
+struct onnx_context_t * onnx_context_alloc_from_file(const char * filename, struct onnx_resolver_t ** r, int rlen, struct hmap_t * shape_params)
 {
 	struct onnx_context_t * ctx = NULL;
 	FILE * fp;
@@ -140,7 +140,7 @@ struct onnx_context_t * onnx_context_alloc_from_file(const char * filename, stru
 			if(buf)
 			{
 				for(len = 0; len < l; len += fread(buf + len, 1, l - len, fp));
-				ctx = onnx_context_alloc(buf, len, r, rlen);
+				ctx = onnx_context_alloc(buf, len, r, rlen, shape_params);
 				onnx_free(buf);
 			}
 		}
@@ -174,12 +174,12 @@ void onnx_context_free(struct onnx_context_t * ctx)
 	}
 }
 
-static struct onnx_tensor_t * onnx_tensor_alloc_from_value_info(Onnx__ValueInfoProto * v)
+static struct onnx_tensor_t * onnx_tensor_alloc_from_value_info(struct onnx_context_t * ctx, Onnx__ValueInfoProto * v)
 {
 	struct onnx_tensor_t * t;
 	enum onnx_tensor_type_t type;
 	int * dims = NULL;
-	int ndim;
+	int ndim = 0;
 	int i;
 
 	if(!v || !v->name)
@@ -189,28 +189,38 @@ static struct onnx_tensor_t * onnx_tensor_alloc_from_value_info(Onnx__ValueInfoP
 	{
 	case ONNX__TYPE_PROTO__VALUE_TENSOR_TYPE:
 		type = (enum onnx_tensor_type_t)v->type->tensor_type->elem_type;
-		ndim = v->type->tensor_type->shape->n_dim;
-		if(ndim > 0)
-		{
-			dims = onnx_malloc(sizeof(int) * ndim);
-			if(dims)
+		if(v->type->tensor_type->shape) {
+			ndim = v->type->tensor_type->shape->n_dim;
+			if(ndim > 0)
 			{
-				for(i = 0; i < ndim; i++)
+				dims = onnx_malloc(sizeof(int) * ndim);
+				if(dims)
 				{
-					switch(v->type->tensor_type->shape->dim[i]->value_case)
+					for(i = 0; i < ndim; i++)
 					{
-					case ONNX__TENSOR_SHAPE_PROTO__DIMENSION__VALUE_DIM_VALUE:
-						dims[i] = v->type->tensor_type->shape->dim[i]->dim_value;
-						break;
-					case ONNX__TENSOR_SHAPE_PROTO__DIMENSION__VALUE_DIM_PARAM:
-						if(onnx_strcmp(v->type->tensor_type->shape->dim[i]->dim_param, "batch_size") == 0)
-							dims[i] = 1;
-						else
-							dims[i] = 1;
-						break;
-					default:
-						dims[i] = 1;
-						break;
+						switch(v->type->tensor_type->shape->dim[i]->value_case)
+						{
+						case ONNX__TENSOR_SHAPE_PROTO__DIMENSION__VALUE_DIM_VALUE:
+							dims[i] = v->type->tensor_type->shape->dim[i]->dim_value;
+							break;
+						case ONNX__TENSOR_SHAPE_PROTO__DIMENSION__VALUE_DIM_PARAM:
+							{
+								const char* dim_param = v->type->tensor_type->shape->dim[i]->dim_param;
+								if(ctx->shape_params) {
+									int64_t* value = hmap_search(ctx->shape_params, dim_param);
+									if(value) {
+										dims[i] = *value;
+										break;
+									}
+								}
+								// Если размер неизвестен - помечаем как динамический
+								dims[i] = -1;
+							}
+							break;
+						default:
+							dims[i] = -1; // Неизвестный размер
+							break;
+						}
 					}
 				}
 			}
@@ -1088,7 +1098,7 @@ struct onnx_graph_t * onnx_graph_alloc(struct onnx_context_t * ctx, Onnx__GraphP
 		v = graph->input[i];
 		if(!onnx_tensor_search(ctx, v->name))
 		{
-			t = onnx_tensor_alloc_from_value_info(v);
+			t = onnx_tensor_alloc_from_value_info(ctx, v);
 			if(t)
 			{
 				for(j = 0; j < graph->n_initializer; j++)
@@ -1109,7 +1119,7 @@ struct onnx_graph_t * onnx_graph_alloc(struct onnx_context_t * ctx, Onnx__GraphP
 		v = graph->output[i];
 		if(!onnx_tensor_search(ctx, v->name))
 		{
-			t = onnx_tensor_alloc_from_value_info(v);
+			t = onnx_tensor_alloc_from_value_info(ctx, v);
 			if(t)
 				hmap_add(ctx->map, t->name, t);
 		}
@@ -1120,7 +1130,7 @@ struct onnx_graph_t * onnx_graph_alloc(struct onnx_context_t * ctx, Onnx__GraphP
 		v = graph->value_info[i];
 		if(!onnx_tensor_search(ctx, v->name))
 		{
-			t = onnx_tensor_alloc_from_value_info(v);
+			t = onnx_tensor_alloc_from_value_info(ctx, v);
 			if(t)
 				hmap_add(ctx->map, t->name, t);
 		}
@@ -1179,6 +1189,7 @@ struct onnx_graph_t * onnx_graph_alloc(struct onnx_context_t * ctx, Onnx__GraphP
 
 		n->ctx = ctx;
 		n->proto = graph->node[i];
+		n->index = i;
 		domain = n->proto->domain;
 		if(!domain || (onnx_strlen(domain) == 0))
 			domain = "ai.onnx";

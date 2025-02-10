@@ -65,6 +65,7 @@ struct onnx_node_t {
 	struct onnx_tensor_t ** outputs;
 	int noutput;
 	Onnx__NodeProto * proto;
+	int index;
 
 	int (*init)(struct onnx_node_t * n);
 	int (*exit)(struct onnx_node_t * n);
@@ -85,6 +86,7 @@ struct onnx_context_t {
 	void ** rctx;
 	int rlen;
 	struct onnx_graph_t * g;
+	struct hmap_t * shape_params;
 };
 
 struct onnx_resolver_t {
@@ -264,8 +266,8 @@ struct onnx_resolver_t {
 	void (*op_SoftmaxCrossEntropyLoss)(struct onnx_node_t * n);
 };
 
-struct onnx_context_t * onnx_context_alloc(const void * buf, size_t len, struct onnx_resolver_t ** r, int rlen);
-struct onnx_context_t * onnx_context_alloc_from_file(const char * filename, struct onnx_resolver_t ** r, int rlen);
+struct onnx_context_t * onnx_context_alloc(const void * buf, size_t len, struct onnx_resolver_t ** r, int rlen, struct hmap_t * shape_params);
+struct onnx_context_t * onnx_context_alloc_from_file(const char * filename, struct onnx_resolver_t ** r, int rlen, struct hmap_t * shape_params);
 void onnx_context_free(struct onnx_context_t * ctx);
 
 struct onnx_graph_t * onnx_graph_alloc(struct onnx_context_t * ctx, Onnx__GraphProto * graph);
