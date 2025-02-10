@@ -57,7 +57,17 @@ static int ConstantOfShape_init(struct onnx_node_t * n)
 				switch(t->data_type)
 				{
 				case ONNX__TENSOR_PROTO__DATA_TYPE__FLOAT:
-					pdat->scalar.v_float32 = t->float_data[0];
+					if(t->n_float_data > 0)
+						pdat->scalar.v_float32 = t->float_data[0];
+					else if(t->raw_data.len >= sizeof(float))
+					{
+						uint32_t * q = (uint32_t *)t->raw_data.data;
+						union { uint32_t u; float f; } v;
+						v.u = le32_to_cpu(q[0]);
+						pdat->scalar.v_float32 = v.f;
+					}
+					else
+						pdat->scalar.v_float32 = 0.0f;
 					break;
 				case ONNX__TENSOR_PROTO__DATA_TYPE__UINT8:
 					pdat->scalar.v_uint8 = t->int32_data[0];
@@ -111,7 +121,7 @@ static int ConstantOfShape_init(struct onnx_node_t * n)
 			else
 			{
 				pdat->type = ONNX_TENSOR_TYPE_FLOAT32;
-				onnx_memset(&pdat->scalar, 0, sizeof(union onnx_scalar_t));
+				pdat->scalar.v_float32 = 0.0f;
 			}
 			pdat->size = onnx_tensor_type_sizeof(pdat->type);
 			n->priv = pdat;
